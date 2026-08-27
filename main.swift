@@ -2,6 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import CoreServices
 import Foundation
+import QuickLookUI
 
 private enum ItemKind {
     case website
@@ -122,6 +123,14 @@ private func hiddenConfigQuery(_ query: String) -> String? {
     let trimmed = normalizedSearchInput(query).trimmingCharacters(in: .whitespacesAndNewlines)
     guard trimmed.hasPrefix("@") else { return nil }
     return String(trimmed.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func spaceQuickLookEligible(query: String, kind: ItemKind) -> Bool {
+    guard fileExtensionQuery(query) != nil || hiddenConfigQuery(query) != nil else { return false }
+    switch kind {
+    case .file, .folder: return true
+    default: return false
+    }
 }
 
 private func hiddenConfigActivity(at url: URL, now: Date, scanLimit: Int = 5_000) -> HiddenConfigActivity {
@@ -486,12 +495,12 @@ private final class ResultCell: NSTableCellView {
     required init?(coder: NSCoder) { nil }
 }
 
-private final class SearchViewController: NSViewController, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
+private final class SearchViewController: NSViewController, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate, QLPreviewPanelDataSource {
     private let searchField = NSSearchField()
     private let statusLabel = NSTextField(labelWithString: "")
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
-    private let footerLabel = NSTextField(labelWithString: "↑↓ 选择   ↩ 打开   ⌘↩ 在访达显示   可拖动文件   ⌘Space 显示/隐藏")
+    private let footerLabel = NSTextField(labelWithString: "↑↓ 选择   Space 预览文件   ↩ 打开   ⌘↩ 在访达显示   可拖动文件   ⌘Space 显示/隐藏")
     private var applications = installedApplications()
     private let bookmarks = loadBookmarks()
     private var websiteResults: [SearchItem] = []
@@ -505,6 +514,8 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
     private var isRefreshingApplications = false
     private var fileSearchProcess: Process?
     private var fileSearchWorkItem: DispatchWorkItem?
+    private var quickLookKeyMonitor: Any?
+    private var previewedURL: URL?
     private var searchGeneration = 0
     private(set) var results: [SearchItem] = []
 
@@ -580,6 +591,19 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         ])
         updateResults()
         refreshFileIndex()
+        quickLookKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == UInt16(kVK_Space),
+                  event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+                  QLPreviewPanel.sharedPreviewPanelExists(),
+                  QLPreviewPanel.shared()?.isVisible == true
+            else { return event }
+            self?.closeQuickLook()
+            return nil
+        }
+    }
+
+    deinit {
+        if let quickLookKeyMonitor { NSEvent.removeMonitor(quickLookKeyMonitor) }
     }
 
     override func viewDidLayout() {
@@ -588,6 +612,58 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         let height = max(scrollView.contentSize.height, CGFloat(results.count) * (tableView.rowHeight + tableView.intercellSpacing.height))
         tableView.frame = NSRect(x: 0, y: 0, width: width, height: height)
         tableView.tableColumns.first?.width = width
+    }
+
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
+
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = self
+    }
+
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = nil
+    }
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        previewedURL == nil ? 0 : 1
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
+        previewedURL as NSURL?
+    }
+
+    private func selectedPreviewURL() -> URL? {
+        let row = tableView.selectedRow >= 0 ? tableView.selectedRow : 0
+        guard results.indices.contains(row),
+              spaceQuickLookEligible(query: searchField.stringValue, kind: results[row].kind)
+        else { return nil }
+        return results[row].url
+    }
+
+    private func toggleQuickLook() {
+        guard let url = selectedPreviewURL(), let panel = QLPreviewPanel.shared() else { return }
+        if panel.isVisible {
+            closeQuickLook()
+            return
+        }
+        previewedURL = url
+        panel.updateController()
+        panel.reloadData()
+        panel.currentPreviewItemIndex = 0
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    func handleSpaceKey() -> Bool {
+        guard selectedPreviewURL() != nil else { return false }
+        toggleQuickLook()
+        return true
+    }
+
+    func closeQuickLook() {
+        if QLPreviewPanel.sharedPreviewPanelExists(), let panel = QLPreviewPanel.shared() {
+            panel.orderOut(nil)
+        }
+        previewedURL = nil
     }
 
     func focusSearch() {
@@ -619,6 +695,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
     }
 
     func clearSearch() {
+        closeQuickLook()
         searchField.stringValue = ""
         fileSearchWorkItem?.cancel()
         fileSearchProcess?.terminate()
@@ -685,6 +762,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
     }
 
     func controlTextDidChange(_ obj: Notification) {
+        closeQuickLook()
         let input = normalizedSearchInput(searchField.stringValue)
         if input != searchField.stringValue {
             let selection = searchField.currentEditor()?.selectedRange
@@ -744,6 +822,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         guard !results.isEmpty else { return }
         let row = tableView.selectedRow >= 0 ? tableView.selectedRow : 0
         let item = results[row]
+        closeQuickLook()
         if item.kind == .fileType {
             searchField.stringValue = item.title
             performSearch()
@@ -1039,7 +1118,19 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
 }
 
 private final class LauncherWindow: NSWindow {
+    var spaceHandler: (() -> Bool)?
+
     override var canBecomeKey: Bool { true }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown,
+           event.keyCode == UInt16(kVK_Space),
+           event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+           spaceHandler?() == true {
+            return
+        }
+        super.sendEvent(event)
+    }
 }
 
 private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -1069,6 +1160,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.contentViewController = controller
+        window.spaceHandler = { [weak controller] in controller?.handleSpaceKey() ?? false }
         window.setContentSize(NSSize(width: 760, height: 520))
         window.minSize = NSSize(width: 620, height: 420)
         window.delegate = self
@@ -1119,6 +1211,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
             statusItem.button?.performClick(nil)
             statusItem.menu = nil
         } else if window.isVisible {
+            controller.closeQuickLook()
             window.orderOut(nil)
         } else {
             showWindow()
@@ -1150,6 +1243,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        controller.closeQuickLook()
         sender.orderOut(nil)
         return false
     }
@@ -1170,6 +1264,10 @@ private func runSelfCheck() {
     precondition(hiddenConfigQuery("@") == "")
     precondition(hiddenConfigQuery("＠codex") == "codex")
     precondition(hiddenConfigQuery("codex") == nil)
+    precondition(spaceQuickLookEligible(query: ".png", kind: .file))
+    precondition(spaceQuickLookEligible(query: "@codex", kind: .folder))
+    precondition(!spaceQuickLookEligible(query: "project image", kind: .file))
+    precondition(!spaceQuickLookEligible(query: ".png", kind: .application))
     precondition(normalized("Shadow Rocket") == "shadowrocket")
     precondition(fuzzyScore(query: "shadow", candidate: "Shadowrocket") == 10)
     precondition(fuzzyScore(query: "sr", candidate: "Shadowrocket") != nil)

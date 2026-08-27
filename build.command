@@ -7,7 +7,7 @@ app_dir="$project_dir/dist/秒搜.app"
 mkdir -p "$app_dir/Contents/MacOS"
 mkdir -p "$app_dir/Contents/Resources"
 /usr/bin/swiftc -swift-version 5 -O \
-  -framework AppKit -framework Carbon \
+  -framework AppKit -framework Carbon -framework QuickLookUI \
   "$project_dir/main.swift" \
   -o "$app_dir/Contents/MacOS/秒搜"
 /usr/bin/plutil -lint "$project_dir/Info.plist"
