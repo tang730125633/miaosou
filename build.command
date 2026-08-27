@@ -5,12 +5,14 @@ project_dir="${0:A:h}"
 app_dir="$project_dir/dist/秒搜.app"
 
 mkdir -p "$app_dir/Contents/MacOS"
+mkdir -p "$app_dir/Contents/Resources"
 /usr/bin/swiftc -swift-version 5 -O \
   -framework AppKit -framework Carbon \
   "$project_dir/main.swift" \
   -o "$app_dir/Contents/MacOS/秒搜"
 /usr/bin/plutil -lint "$project_dir/Info.plist"
 /usr/bin/ditto "$project_dir/Info.plist" "$app_dir/Contents/Info.plist"
+/usr/bin/ditto "$project_dir/bookmarks.json" "$app_dir/Contents/Resources/bookmarks.json"
 /usr/bin/codesign --force --deep --sign - "$app_dir"
 "$app_dir/Contents/MacOS/秒搜" --self-check
 /usr/bin/pkill -x "秒搜" 2>/dev/null || true

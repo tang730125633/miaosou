@@ -1,0 +1,62 @@
+[
+  {
+    "title": "黄雀主站",
+    "url": "https://huangquechuanmei.com/",
+    "keywords": ["黄雀", "黄雀主站", "主站", "huangque", "hq"]
+  },
+  {
+    "title": "黄雀 IP12",
+    "url": "https://huangquechuanmei.com/workbench/ip12/",
+    "keywords": ["ip12", "黄雀ip12", "个人ip", "ip孵化", "教练"]
+  },
+  {
+    "title": "我的 GitHub 仓库",
+    "url": "https://github.com/tang730125633?tab=repositories",
+    "keywords": ["github", "gh", "仓库", "代码仓库", "我的仓库"]
+  },
+  {
+    "title": "秒搜 GitHub 仓库",
+    "url": "https://github.com/tang730125633/miaosou",
+    "keywords": ["秒搜", "miaosou", "秒搜仓库"]
+  },
+  {
+    "title": "DeepSeek 余额充值",
+    "url": "https://platform.deepseek.com/balance",
+    "keywords": ["deepseek", "deep seek", "深度求索", "ds", "充值", "余额"]
+  },
+  {
+    "title": "MiniMax 账户钱包",
+    "url": "https://platform.minimaxi.com/console/recharge-records?tab=vouchers",
+    "keywords": ["minimax", "mini max", "海螺", "m2", "充值", "余额"]
+  },
+  {
+    "title": "智谱 BigModel 控制台",
+    "url": "https://open.bigmodel.cn/console",
+    "keywords": ["智谱", "bigmodel", "glm", "zhipu", "充值", "余额"]
+  },
+  {
+    "title": "OpenAI API Billing",
+    "url": "https://platform.openai.com/settings/organization/billing/overview",
+    "keywords": ["openai", "gpt", "api", "billing", "充值", "账单"]
+  },
+  {
+    "title": "X / Twitter",
+    "url": "https://x.com/home",
+    "keywords": ["x", "twitter", "推特"]
+  },
+  {
+    "title": "Bilibili",
+    "url": "https://www.bilibili.com/",
+    "keywords": ["bilibili", "b站", "哔哩哔哩", "小破站"]
+  },
+  {
+    "title": "抖音",
+    "url": "https://www.douyin.com/",
+    "keywords": ["douyin", "抖音", "短视频"]
+  },
+  {
+    "title": "小红书",
+    "url": "https://www.xiaohongshu.com/explore",
+    "keywords": ["xiaohongshu", "小红书", "红书", "xhs", "种草"]
+  }
+]

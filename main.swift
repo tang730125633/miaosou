@@ -4,6 +4,7 @@ import CoreServices
 import Foundation
 
 private enum ItemKind {
+    case website
     case application
     case recommendation
     case file
@@ -36,9 +37,46 @@ private struct InstalledApplication {
     let isRunning: Bool
 }
 
+private struct Bookmark: Decodable {
+    let title: String
+    let url: String
+    let keywords: [String]
+}
+
 private let appAliases: [String: [String]] = [
     "com.liguangming.Shadowrocket": ["小火箭", "代理", "shadow rocket"]
 ]
+
+private func loadBookmarks() -> [Bookmark] {
+    guard let url = Bundle.main.url(forResource: "bookmarks", withExtension: "json"),
+          let data = try? Data(contentsOf: url),
+          let bookmarks = try? JSONDecoder().decode([Bookmark].self, from: data)
+    else { return [] }
+    return bookmarks.filter {
+        guard let url = URL(string: $0.url) else { return false }
+        return url.scheme == "https" || url.scheme == "http"
+    }
+}
+
+private func bookmarkResults(query: String, bookmarks: [Bookmark]) -> [SearchItem] {
+    bookmarks.enumerated().compactMap { index, bookmark in
+        let scores = ([bookmark.title] + bookmark.keywords).compactMap {
+            fuzzyScore(query: query, candidate: $0)
+        }
+        guard let score = scores.min(), let url = URL(string: bookmark.url) else { return nil }
+        return SearchItem(
+            kind: .website,
+            title: bookmark.title,
+            subtitle: bookmark.url,
+            url: url,
+            score: score * 100 + index,
+            modifiedAt: .distantPast
+        )
+    }
+    .sorted { $0.score < $1.score }
+    .prefix(8)
+    .map { $0 }
+}
 
 private func normalized(_ text: String) -> String {
     text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
@@ -301,6 +339,8 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
     private let scrollView = NSScrollView()
     private let footerLabel = NSTextField(labelWithString: "↑↓ 选择   ↩ 打开   ⌘↩ 在访达显示   ⌘Space 显示/隐藏")
     private var applications = installedApplications()
+    private let bookmarks = loadBookmarks()
+    private var websiteResults: [SearchItem] = []
     private var appResults: [SearchItem] = []
     private var fileResults: [SearchItem] = []
     private var indexedFiles: [IndexedFile] = []
@@ -410,14 +450,26 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         let cell = tableView.makeView(withIdentifier: identifier, owner: self) as? ResultCell ?? ResultCell()
         cell.identifier = identifier
         let item = results[row]
-        cell.iconView.image = NSWorkspace.shared.icon(forFile: item.url.path)
         cell.titleLabel.stringValue = item.title
         cell.subtitleLabel.stringValue = item.subtitle
         switch item.kind {
-        case .application: cell.badgeLabel.stringValue = "应用"
-        case .recommendation: cell.badgeLabel.stringValue = "推荐"
-        case .file: cell.badgeLabel.stringValue = "文件"
-        case .folder: cell.badgeLabel.stringValue = "文件夹"
+        case .website:
+            cell.iconView.image = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome")
+                .map { NSWorkspace.shared.icon(forFile: $0.path) }
+                ?? NSImage(systemSymbolName: "globe", accessibilityDescription: "网站")
+            cell.badgeLabel.stringValue = "网站"
+        case .recommendation:
+            cell.iconView.image = NSWorkspace.shared.icon(forFile: item.url.path)
+            cell.badgeLabel.stringValue = "推荐"
+        case .application:
+            cell.iconView.image = NSWorkspace.shared.icon(forFile: item.url.path)
+            cell.badgeLabel.stringValue = "应用"
+        case .file:
+            cell.iconView.image = NSWorkspace.shared.icon(forFile: item.url.path)
+            cell.badgeLabel.stringValue = "文件"
+        case .folder:
+            cell.iconView.image = NSWorkspace.shared.icon(forFile: item.url.path)
+            cell.badgeLabel.stringValue = "文件夹"
         }
         return cell
     }
@@ -461,6 +513,11 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         guard !results.isEmpty else { return }
         let row = tableView.selectedRow >= 0 ? tableView.selectedRow : 0
         let item = results[row]
+        if item.kind == .website {
+            openWebsiteInChrome(item.url)
+            view.window?.orderOut(nil)
+            return
+        }
         if NSEvent.modifierFlags.contains(.command) {
             NSWorkspace.shared.activateFileViewerSelecting([item.url])
         } else {
@@ -469,9 +526,20 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         view.window?.orderOut(nil)
     }
 
+    private func openWebsiteInChrome(_ url: URL) {
+        guard let chrome = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome") else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        NSWorkspace.shared.open([url], withApplicationAt: chrome, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            if error != nil { DispatchQueue.main.async { NSWorkspace.shared.open(url) } }
+        }
+    }
+
     private func updateResults() {
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty {
+            websiteResults = []
             let recommendations = recommendedApplications(applications, excluding: excludedRecommendationBundleID)
             let visibleApps = recommendations.isEmpty ? Array(applications.prefix(10)) : Array(recommendations.prefix(10))
             appResults = visibleApps.enumerated().map { index, app in
@@ -489,6 +557,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
                 ? "已找到 \(applications.count) 个应用 · \(fileStatus)"
                 : "推荐打开 · 最近和常用优先 · \(fileStatus)"
         } else {
+            websiteResults = bookmarkResults(query: query, bookmarks: bookmarks)
             appResults = applications.compactMap { app in
                 guard let score = fuzzyScore(query: query, candidate: app.searchable) else { return nil }
                 return SearchItem(kind: .application, title: app.name, subtitle: app.url.path, url: app.url, score: score, modifiedAt: .distantPast)
@@ -496,12 +565,12 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
             .sorted { $0.score == $1.score ? $0.title < $1.title : $0.score < $1.score }
             .prefix(10)
             .map { $0 }
-            statusLabel.stringValue = fileResults.isEmpty && isIndexingFiles
-                ? "正在整理常用文件…"
-                : "应用优先 · 文件和文件夹直接检索"
+            statusLabel.stringValue = !websiteResults.isEmpty
+                ? "网站优先 · 回车用 Chrome 打开"
+                : (fileResults.isEmpty && isIndexingFiles ? "正在整理常用文件…" : "应用优先 · 文件和文件夹直接检索")
         }
 
-        results = Array(appResults.prefix(10)) + Array(fileResults.prefix(12))
+        results = websiteResults + Array(appResults.prefix(10)) + Array(fileResults.prefix(12))
         tableView.reloadData()
         view.needsLayout = true
         if !results.isEmpty {
@@ -704,11 +773,14 @@ private func runSelfCheck() {
     let recent = InstalledApplication(url: URL(fileURLWithPath: "/Recent.app"), name: "Recent", searchable: "Recent", bundleID: "test.recent", useCount: 5, lastUsedAt: now.addingTimeInterval(-3_600), isRunning: false)
     let stale = InstalledApplication(url: URL(fileURLWithPath: "/Stale.app"), name: "Stale", searchable: "Stale", bundleID: "test.stale", useCount: 50, lastUsedAt: now.addingTimeInterval(-120 * 86_400), isRunning: false)
     precondition(recommendedApplications([stale, recent], excluding: nil, now: now).first?.bundleID == "test.recent")
+    let bookmarks = loadBookmarks()
+    precondition(bookmarkResults(query: "X", bookmarks: bookmarks).first?.title == "X / Twitter")
+    precondition(bookmarkResults(query: "黄雀", bookmarks: bookmarks).first?.title == "黄雀主站")
     let apps = installedApplications()
     let shadowrocket = apps.first { $0.name == "Shadowrocket" && $0.url.path == "/Applications/Shadowrocket.app" }
     precondition(shadowrocket != nil)
     precondition(fuzzyScore(query: "小火箭", candidate: shadowrocket!.searchable) != nil)
-    print("PASS: application and local filename search")
+    print("PASS: recommendations, bookmarks, applications and local filenames")
 }
 
 if CommandLine.arguments.contains("--self-check") {

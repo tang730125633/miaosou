@@ -6,6 +6,7 @@
 
 - `⌘ Space` 显示或隐藏搜索框。
 - 搜索框为空时，按 macOS 的应用使用次数与最后使用时间显示“推荐打开”，并排除当前正在使用的应用。
+- 输入网站关键词时，书签排在应用和文件之前；回车固定用 Google Chrome 打开。
 - 直接扫描 `/Applications`、`/System/Applications` 和用户应用目录，不依赖 Spotlight 查找 App。
 - 后台直接整理桌面、文稿和下载的文件名与文件夹名。
 - 同时用 macOS 元数据搜索补充结果；应用始终优先。
@@ -31,6 +32,8 @@
 /Applications/秒搜.app/Contents/MacOS/秒搜 --self-check
 codesign --verify --deep --strict /Applications/秒搜.app
 ```
+
+网站书签维护在 `bookmarks.json`；每项只包含标题、HTTPS 地址和关键词别名。例如 `X / Twitter` 支持 `X`、`Twitter` 和“推特”。
 
 ## 当前边界
 
