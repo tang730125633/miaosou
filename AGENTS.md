@@ -1,0 +1,24 @@
+# 秒搜项目协作规则
+
+## 产品边界
+
+- 秒搜是原生 macOS 应用启动器与文件名检索器，`⌘ Space` 是主入口。
+- 应用搜索必须独立于 Spotlight；文件搜索以标准用户目录的直接索引为主、`mdfind` 为补充。
+- 当前不做文件正文、AI 语义搜索、搜索历史或自定义目录设置；Tang 明确扩围后再做。
+
+## 实现纪律
+
+- 优先 AppKit、Foundation 和 macOS 原生能力，不新增第三方依赖。
+- 保持单一 `main.swift`，除非真实复杂度已经无法维护；不预建框架或抽象层。
+- 构建产物 `dist/` 不提交；本机安装包不是发布证明。
+- 修改搜索逻辑后必须保留最小自检，并用真实界面确认应用、文件和文件夹结果。
+
+## 验收
+
+```bash
+./build.command
+/Applications/秒搜.app/Contents/MacOS/秒搜 --self-check
+codesign --verify --deep --strict /Applications/秒搜.app
+```
+
+交付时分别说明本地代码、提交/推送、安装包和真实快捷键验收状态。
