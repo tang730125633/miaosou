@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">秒搜三种检索路径</title>
+  <desc id="desc">Command Space opens Miaosou, then blank input recommends apps, keyword input searches apps files and websites, and dot input filters by file extension.</desc>
+  <rect width="1200" height="620" rx="24" fill="#191814"/>
+  <rect x="1" y="1" width="1198" height="618" rx="23" fill="none" stroke="#f1eee4" stroke-opacity="0.2"/>
+  <text x="52" y="52" fill="#d65336" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20" letter-spacing="2">ONE SHORTCUT / THREE ROUTES</text>
+  <text x="52" y="105" fill="#f1eee4" font-family="Georgia, 'Songti SC', serif" font-size="43" font-weight="700">⌘ Space 之后，按你的意图分流</text>
+
+  <g transform="translate(52 140)">
+    <rect width="1096" height="112" rx="16" fill="#f1eee4"/>
+    <rect width="7" height="112" rx="3.5" fill="#d65336"/>
+    <text x="28" y="39" fill="#d65336" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22" font-weight="700">EMPTY</text>
+    <text x="190" y="68" fill="#171612" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="36" font-weight="700">推荐打开</text>
+    <text x="615" y="66" fill="#6e6a61" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="25">最近使用 + 常用次数</text>
+  </g>
+  <path d="M600 258v28" stroke="#d65336" stroke-width="3"/>
+  <path d="M592 278l8 10 8-10" fill="none" stroke="#d65336" stroke-width="3"/>
+
+  <g transform="translate(52 294)">
+    <rect width="1096" height="112" rx="16" fill="#e7e1d3"/>
+    <rect width="7" height="112" rx="3.5" fill="#d65336"/>
+    <text x="28" y="39" fill="#d65336" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22" font-weight="700">KEYWORD</text>
+    <text x="190" y="68" fill="#171612" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="36" font-weight="700">应用 · 文件 · 网站</text>
+    <text x="615" y="66" fill="#6e6a61" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="25">本地先出，深层后台补充</text>
+  </g>
+  <path d="M600 412v28" stroke="#d65336" stroke-width="3"/>
+  <path d="M592 432l8 10 8-10" fill="none" stroke="#d65336" stroke-width="3"/>
+
+  <g transform="translate(52 448)">
+    <rect width="1096" height="112" rx="16" fill="#f1eee4"/>
+    <rect width="7" height="112" rx="3.5" fill="#d65336"/>
+    <text x="28" y="39" fill="#d65336" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22" font-weight="700">.EXT</text>
+    <text x="190" y="68" fill="#171612" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="36" font-weight="700">按文件后缀筛选</text>
+    <text x="615" y="66" fill="#6e6a61" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="25">全部结果，修改时间倒序</text>
+  </g>
+
+  <text x="52" y="598" fill="#f1eee4" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18">↩ OPEN</text>
+  <text x="200" y="598" fill="#f1eee4" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18">⌘↩ REVEAL IN FINDER</text>
+  <text x="510" y="598" fill="#f1eee4" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18">DRAG FILE</text>
+  <text x="1148" y="598" fill="#d65336" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" text-anchor="end">LOCAL ONLY</text>
+</svg>
