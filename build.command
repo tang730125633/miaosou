@@ -3,9 +3,26 @@ set -euo pipefail
 
 project_dir="${0:A:h}"
 app_dir="$project_dir/dist/秒搜.app"
+icon_source="$project_dir/assets/app-icon.svg"
+iconset_dir="$project_dir/dist/AppIcon.iconset"
 
 mkdir -p "$app_dir/Contents/MacOS"
 mkdir -p "$app_dir/Contents/Resources"
+mkdir -p "$iconset_dir"
+render_icon() {
+  /usr/bin/sips -z "$2" "$2" -s format png "$icon_source" --out "$iconset_dir/$1" >/dev/null
+}
+render_icon icon_16x16.png 16
+render_icon icon_16x16@2x.png 32
+render_icon icon_32x32.png 32
+render_icon icon_32x32@2x.png 64
+render_icon icon_128x128.png 128
+render_icon icon_128x128@2x.png 256
+render_icon icon_256x256.png 256
+render_icon icon_256x256@2x.png 512
+render_icon icon_512x512.png 512
+render_icon icon_512x512@2x.png 1024
+/usr/bin/iconutil -c icns "$iconset_dir" -o "$app_dir/Contents/Resources/AppIcon.icns"
 /usr/bin/swiftc -swift-version 5 -O \
   -framework AppKit -framework Carbon -framework QuickLookUI \
   "$project_dir/main.swift" \

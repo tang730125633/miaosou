@@ -122,6 +122,7 @@ miaosou/
 ├── bookmarks.json   # 网站标题、URL 与关键词别名
 ├── Info.plist       # App 标识、版本与文件夹权限说明
 ├── build.command    # 编译、自检、签名、安装与启动
+├── assets/app-icon.svg # 暖纸、黑墨与朱橙闪电 App Icon 源文件
 └── assets/readme/   # GitHub README 视觉资产与真实截图
 ```
 

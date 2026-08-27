@@ -1260,6 +1260,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
 }
 
 private func runSelfCheck() {
+    precondition(Bundle.main.url(forResource: "AppIcon", withExtension: "icns") != nil)
     precondition(normalizedSearchInput("。pdf，md．docx＠pi") == ".pdf,md.docx@pi")
     precondition(hiddenConfigQuery("@") == "")
     precondition(hiddenConfigQuery("＠codex") == "codex")
