@@ -96,11 +96,17 @@ private func bookmarkResults(query: String, bookmarks: [Bookmark]) -> [SearchIte
 }
 
 private func fileExtensionQuery(_ query: String) -> String? {
-    let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let trimmed = normalizedSearchInput(query).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard trimmed.hasPrefix("."), trimmed.count > 1 else { return nil }
     let value = String(trimmed.dropFirst())
     guard value.count <= 10, value.allSatisfy({ $0.isLetter || $0.isNumber }) else { return nil }
     return value
+}
+
+private func normalizedSearchInput(_ text: String) -> String {
+    text.replacingOccurrences(of: "。", with: ".")
+        .replacingOccurrences(of: "．", with: ".")
+        .replacingOccurrences(of: "，", with: ",")
 }
 
 private func fileTypeSuggestions() -> [SearchItem] {
@@ -580,6 +586,12 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
     }
 
     func controlTextDidChange(_ obj: Notification) {
+        let input = normalizedSearchInput(searchField.stringValue)
+        if input != searchField.stringValue {
+            let selection = searchField.currentEditor()?.selectedRange
+            searchField.stringValue = input
+            if let selection { searchField.currentEditor()?.selectedRange = selection }
+        }
         performSearch()
     }
 
@@ -1036,10 +1048,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
 }
 
 private func runSelfCheck() {
+    precondition(normalizedSearchInput("。pdf，md．docx") == ".pdf,md.docx")
     precondition(normalized("Shadow Rocket") == "shadowrocket")
     precondition(fuzzyScore(query: "shadow", candidate: "Shadowrocket") == 10)
     precondition(fuzzyScore(query: "sr", candidate: "Shadowrocket") != nil)
     precondition(fileExtensionQuery(".PDF") == "pdf")
+    precondition(fileExtensionQuery("。PDF") == "pdf")
     precondition(fileExtensionQuery(".") == nil)
     precondition(fileTypeSuggestions().first?.title == ".pdf")
     precondition(NSURL(fileURLWithPath: "/tmp/example.pdf").writableTypes(for: NSPasteboard.general).contains(.fileURL))
