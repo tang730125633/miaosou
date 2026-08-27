@@ -104,6 +104,36 @@ private func bookmarkResults(query: String, bookmarks: [Bookmark]) -> [SearchIte
     .map { $0 }
 }
 
+private func directWebsiteResult(query: String) -> SearchItem? {
+    let text = normalizedSearchInput(query).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty, !text.contains(where: \.isWhitespace) else { return nil }
+    let lowercased = text.lowercased()
+    let candidate: String
+    if lowercased.hasPrefix("https://") || lowercased.hasPrefix("http://") {
+        candidate = text
+    } else if lowercased.hasPrefix("www.") {
+        candidate = "https://\(text)"
+    } else {
+        return nil
+    }
+    guard let components = URLComponents(string: candidate),
+          let scheme = components.scheme?.lowercased(),
+          scheme == "https" || scheme == "http",
+          components.host?.isEmpty == false,
+          components.user == nil,
+          components.password == nil,
+          let url = components.url
+    else { return nil }
+    return SearchItem(
+        kind: .website,
+        title: "用 Chrome 打开 \(components.host ?? url.absoluteString)",
+        subtitle: url.absoluteString,
+        url: url,
+        score: -1,
+        modifiedAt: .distantPast
+    )
+}
+
 private func fileExtensionQuery(_ query: String) -> String? {
     let trimmed = normalizedSearchInput(query).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard trimmed.hasPrefix("."), trimmed.count > 1 else { return nil }
@@ -909,7 +939,10 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
                 statusLabel.stringValue = ".\(fileExtension) 文件 · \(fileResults.count) 个 · 最近修改优先"
             }
         } else {
-            websiteResults = bookmarkResults(query: query, bookmarks: bookmarks)
+            let directWebsite = directWebsiteResult(query: query)
+            websiteResults = directWebsite.map { [$0] } ?? []
+            websiteResults += bookmarkResults(query: query, bookmarks: bookmarks)
+                .filter { $0.url != directWebsite?.url }
             appResults = applications.compactMap { app in
                 guard let score = fuzzyScore(query: query, candidate: app.searchable) else { return nil }
                 return SearchItem(kind: .application, title: app.name, subtitle: app.url.path, url: app.url, score: score, modifiedAt: .distantPast)
@@ -917,9 +950,12 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
             .sorted { $0.score == $1.score ? $0.title < $1.title : $0.score < $1.score }
             .prefix(10)
             .map { $0 }
-            statusLabel.stringValue = !websiteResults.isEmpty
+            statusLabel.stringValue = directWebsite != nil
+                ? "网址已识别 · 回车用 Chrome 打开"
+                : (!websiteResults.isEmpty
                 ? "网站优先 · 回车用 Chrome 打开"
                 : (fileResults.isEmpty && isIndexingFiles ? "正在整理常用文件…" : "应用优先 · 文件和文件夹直接检索")
+                )
         }
 
         if hiddenConfigQuery(query) != nil {
@@ -1182,6 +1218,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "退出秒搜", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
+
+        let editItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: "")
+        let editMenu = NSMenu(title: "编辑")
+        editMenu.addItem(withTitle: "撤销", action: Selector(("undo:")), keyEquivalent: "z")
+        let redoItem = editMenu.addItem(withTitle: "重做", action: Selector(("redo:")), keyEquivalent: "z")
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "复制", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
         NSApp.mainMenu = mainMenu
     }
 
@@ -1288,6 +1337,10 @@ private func runSelfCheck() {
     let bookmarks = loadBookmarks()
     precondition(bookmarkResults(query: "X", bookmarks: bookmarks).first?.title == "X / Twitter")
     precondition(bookmarkResults(query: "黄雀", bookmarks: bookmarks).first?.title == "黄雀主站")
+    precondition(directWebsiteResult(query: "https://example.com/path?q=1")?.url.absoluteString == "https://example.com/path?q=1")
+    precondition(directWebsiteResult(query: "www.example.com")?.url.absoluteString == "https://www.example.com")
+    precondition(directWebsiteResult(query: "report.pdf") == nil)
+    precondition(directWebsiteResult(query: "file:///tmp/example") == nil)
     let hiddenFixture = FileManager.default.temporaryDirectory.appendingPathComponent("miaosou-hidden-\(UUID().uuidString)")
     let recentHidden = hiddenFixture.appendingPathComponent(".recent")
     let oldHidden = hiddenFixture.appendingPathComponent(".old")
