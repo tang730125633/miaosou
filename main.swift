@@ -397,7 +397,10 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
     private var indexedFiles: [IndexedFile] = []
     private var isIndexingFiles = true
     private var excludedRecommendationBundleID: String?
+    private var lastApplicationRefresh = Date()
+    private var isRefreshingApplications = false
     private var fileSearchProcess: Process?
+    private var fileSearchWorkItem: DispatchWorkItem?
     private var searchGeneration = 0
     private(set) var results: [SearchItem] = []
 
@@ -490,8 +493,19 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
 
     func showRecommendations(excluding bundleID: String?) {
         excludedRecommendationBundleID = bundleID
-        applications = installedApplications()
         clearSearch()
+        guard !isRefreshingApplications, Date().timeIntervalSince(lastApplicationRefresh) >= 60 else { return }
+        isRefreshingApplications = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let refreshed = installedApplications()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.applications = refreshed
+                self.lastApplicationRefresh = Date()
+                self.isRefreshingApplications = false
+                if self.searchField.stringValue.isEmpty { self.updateResults() }
+            }
+        }
     }
 
     func refreshApplications() {
@@ -502,6 +516,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
 
     func clearSearch() {
         searchField.stringValue = ""
+        fileSearchWorkItem?.cancel()
         fileSearchProcess?.terminate()
         fileResults = []
         updateResults()
@@ -570,10 +585,20 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
 
     private func performSearch() {
         searchGeneration += 1
+        fileSearchWorkItem?.cancel()
         fileSearchProcess?.terminate()
         fileResults = []
         updateResults()
-        searchFiles(query: searchField.stringValue, generation: searchGeneration)
+        let query = searchField.stringValue
+        guard query != ".", !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let generation = searchGeneration
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, generation == self.searchGeneration else { return }
+            self.searchFiles(query: query, generation: generation)
+        }
+        fileSearchWorkItem = workItem
+        let delay = fileExtensionQuery(query) == nil ? 0.12 : 0.05
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -725,6 +750,11 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let directItems = directFileMatches(query: term, files: directIndex)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, generation == self.searchGeneration else { return }
+                self.fileResults = Array(directItems.prefix(12))
+                self.updateResults()
+            }
             let publish: ([SearchItem]) -> Void = { metadataItems in
                 var seen = Set<String>()
                 let merged = (directItems + metadataItems)
@@ -749,7 +779,10 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
             process.arguments = ["-onlyin", FileManager.default.homeDirectoryForCurrentUser.path, "-name", term]
             process.standardOutput = pipe
             process.standardError = FileHandle.nullDevice
-            DispatchQueue.main.async { self?.fileSearchProcess = process }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, generation == self.searchGeneration else { return }
+                self.fileSearchProcess = process
+            }
 
             do {
                 try process.run()
@@ -808,6 +841,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
             DispatchQueue.main.async { [weak self] in
                 guard let self, generation == self.searchGeneration else { return }
                 self.fileSearchProcess = process
+                self.fileResults = directItems.sorted { $0.modifiedAt > $1.modifiedAt }
                 self.updateResults()
             }
 
@@ -866,6 +900,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
                 let query = self.searchField.stringValue
                 guard !normalized(query).isEmpty else { return }
                 self.searchGeneration += 1
+                self.fileSearchWorkItem?.cancel()
                 self.fileSearchProcess?.terminate()
                 self.searchFiles(query: query, generation: self.searchGeneration)
             }
