@@ -5,6 +5,7 @@ import Foundation
 
 private enum ItemKind {
     case website
+    case fileType
     case application
     case recommendation
     case file
@@ -47,6 +48,22 @@ private let appAliases: [String: [String]] = [
     "com.liguangming.Shadowrocket": ["小火箭", "代理", "shadow rocket"]
 ]
 
+private let fileTypeCatalog: [(extension: String, label: String)] = [
+    ("pdf", "PDF 文档"),
+    ("md", "Markdown 文档"),
+    ("docx", "Word 文档"),
+    ("xlsx", "Excel 表格"),
+    ("pptx", "PowerPoint 演示"),
+    ("png", "PNG 图片"),
+    ("webp", "WebP 图片"),
+    ("jpg", "JPEG 图片"),
+    ("mp4", "MP4 视频"),
+    ("txt", "纯文本"),
+    ("csv", "CSV 数据"),
+    ("zip", "ZIP 压缩包"),
+    ("py", "Python 源码")
+]
+
 private func loadBookmarks() -> [Bookmark] {
     guard let url = Bundle.main.url(forResource: "bookmarks", withExtension: "json"),
           let data = try? Data(contentsOf: url),
@@ -76,6 +93,38 @@ private func bookmarkResults(query: String, bookmarks: [Bookmark]) -> [SearchIte
     .sorted { $0.score < $1.score }
     .prefix(8)
     .map { $0 }
+}
+
+private func fileExtensionQuery(_ query: String) -> String? {
+    let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard trimmed.hasPrefix("."), trimmed.count > 1 else { return nil }
+    let value = String(trimmed.dropFirst())
+    guard value.count <= 10, value.allSatisfy({ $0.isLetter || $0.isNumber }) else { return nil }
+    return value
+}
+
+private func fileTypeSuggestions() -> [SearchItem] {
+    fileTypeCatalog.enumerated().map { index, type in
+        SearchItem(
+            kind: .fileType,
+            title: ".\(type.extension)",
+            subtitle: "\(type.label) · 按最近修改时间排序",
+            url: URL(fileURLWithPath: "/"),
+            score: index,
+            modifiedAt: .distantPast
+        )
+    }
+}
+
+private func isSearchNoisePath(_ path: String) -> Bool {
+    ["/Library/", "/.git/", "/node_modules/", "/.venv/", "/venv/", "/site-packages/", "/dist/", "/build/"]
+        .contains(where: path.contains)
+}
+
+private func datedPathSubtitle(url: URL, modifiedAt: Date) -> String {
+    guard modifiedAt != .distantPast else { return url.deletingLastPathComponent().path }
+    let date = DateFormatter.localizedString(from: modifiedAt, dateStyle: .short, timeStyle: .short)
+    return "\(date) · \(url.deletingLastPathComponent().path)"
 }
 
 private func normalized(_ text: String) -> String {
@@ -339,7 +388,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
     private let statusLabel = NSTextField(labelWithString: "")
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
-    private let footerLabel = NSTextField(labelWithString: "↑↓ 选择   ↩ 打开   ⌘↩ 在访达显示   ⌘Space 显示/隐藏")
+    private let footerLabel = NSTextField(labelWithString: "↑↓ 选择   ↩ 打开   ⌘↩ 在访达显示   可拖动文件   ⌘Space 显示/隐藏")
     private var applications = installedApplications()
     private let bookmarks = loadBookmarks()
     private var websiteResults: [SearchItem] = []
@@ -389,6 +438,11 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         tableView.delegate = self
         tableView.doubleAction = #selector(openSelected)
         tableView.target = self
+        tableView.setDraggingSourceOperationMask(.copy, forLocal: false)
+        let resultMenu = NSMenu()
+        let revealItem = resultMenu.addItem(withTitle: "在访达中显示", action: #selector(revealSelectedInFinder), keyEquivalent: "")
+        revealItem.target = self
+        tableView.menu = resultMenu
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = tableView
@@ -455,6 +509,16 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
 
     func numberOfRows(in tableView: NSTableView) -> Int { results.count }
 
+    func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        guard results.indices.contains(row) else { return nil }
+        switch results[row].kind {
+        case .file, .folder:
+            return results[row].url as NSURL
+        default:
+            return nil
+        }
+    }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let identifier = NSUserInterfaceItemIdentifier("ResultCell")
         let cell = tableView.makeView(withIdentifier: identifier, owner: self) as? ResultCell ?? ResultCell()
@@ -470,6 +534,12 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
             cell.badgeLabel.stringValue = "网站"
             cell.badgeLabel.textColor = .systemBlue
             cell.badgeLabel.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.10)
+        case .fileType:
+            cell.iconView.image = NSImage(systemSymbolName: "doc.text.magnifyingglass", accessibilityDescription: "文件类型")
+                ?? NSImage(systemSymbolName: "doc", accessibilityDescription: "文件类型")
+            cell.badgeLabel.stringValue = "类型"
+            cell.badgeLabel.textColor = .systemTeal
+            cell.badgeLabel.backgroundColor = NSColor.systemTeal.withAlphaComponent(0.10)
         case .recommendation:
             cell.iconView.image = NSWorkspace.shared.icon(forFile: item.url.path)
             cell.badgeLabel.stringValue = "推荐"
@@ -495,6 +565,10 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
     }
 
     func controlTextDidChange(_ obj: Notification) {
+        performSearch()
+    }
+
+    private func performSearch() {
         searchGeneration += 1
         fileSearchProcess?.terminate()
         fileResults = []
@@ -533,17 +607,38 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         guard !results.isEmpty else { return }
         let row = tableView.selectedRow >= 0 ? tableView.selectedRow : 0
         let item = results[row]
+        if item.kind == .fileType {
+            searchField.stringValue = item.title
+            performSearch()
+            return
+        }
         if item.kind == .website {
             openWebsiteInChrome(item.url)
             view.window?.orderOut(nil)
             return
         }
         if NSEvent.modifierFlags.contains(.command) {
-            NSWorkspace.shared.activateFileViewerSelecting([item.url])
+            revealSelectedInFinder()
+            return
         } else {
             NSWorkspace.shared.open(item.url)
         }
         view.window?.orderOut(nil)
+    }
+
+    @objc private func revealSelectedInFinder() {
+        guard results.indices.contains(tableView.selectedRow) else { return }
+        let item = results[tableView.selectedRow]
+        switch item.kind {
+        case .file, .folder:
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            process.arguments = ["-R", item.url.path]
+            try? process.run()
+            view.window?.orderOut(nil)
+        default:
+            return
+        }
     }
 
     private func openWebsiteInChrome(_ url: URL) {
@@ -576,6 +671,21 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
             statusLabel.stringValue = recommendations.isEmpty
                 ? "已找到 \(applications.count) 个应用 · \(fileStatus)"
                 : "推荐打开 · 最近和常用优先 · \(fileStatus)"
+        } else if query == "." {
+            websiteResults = []
+            appResults = []
+            fileResults = []
+            statusLabel.stringValue = "选择文件类型 · 回车查看全部 · 最近修改优先"
+        } else if let fileExtension = fileExtensionQuery(query) {
+            websiteResults = []
+            appResults = []
+            if fileSearchProcess != nil {
+                statusLabel.stringValue = "正在查找所有 .\(fileExtension) 文件…"
+            } else if fileResults.isEmpty {
+                statusLabel.stringValue = "没有找到 .\(fileExtension) 文件"
+            } else {
+                statusLabel.stringValue = ".\(fileExtension) 文件 · \(fileResults.count) 个 · 最近修改优先"
+            }
         } else {
             websiteResults = bookmarkResults(query: query, bookmarks: bookmarks)
             appResults = applications.compactMap { app in
@@ -590,7 +700,13 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
                 : (fileResults.isEmpty && isIndexingFiles ? "正在整理常用文件…" : "应用优先 · 文件和文件夹直接检索")
         }
 
-        results = websiteResults + Array(appResults.prefix(10)) + Array(fileResults.prefix(12))
+        if query == "." {
+            results = fileTypeSuggestions()
+        } else if fileExtensionQuery(query) != nil {
+            results = fileResults
+        } else {
+            results = websiteResults + Array(appResults.prefix(10)) + Array(fileResults.prefix(12))
+        }
         tableView.reloadData()
         view.needsLayout = true
         if !results.isEmpty {
@@ -600,6 +716,10 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
 
     private func searchFiles(query: String, generation: Int) {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let fileExtension = fileExtensionQuery(term) {
+            searchFilesByExtension(fileExtension, generation: generation)
+            return
+        }
         guard !normalized(term).isEmpty else { return }
         let directIndex = indexedFiles
 
@@ -638,7 +758,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
                 guard !process.isRunning else { return }
                 let paths = String(data: data, encoding: .utf8)?.split(separator: "\n").map(String.init) ?? []
                 let items = paths.prefix(120).compactMap { path -> SearchItem? in
-                    guard !["/Library/", "/.git/", "/node_modules/", "/.venv/", "/venv/"].contains(where: path.contains) else { return nil }
+                    guard !isSearchNoisePath(path) else { return nil }
                     let url = URL(fileURLWithPath: path)
                     guard url.pathExtension.lowercased() != "app" else { return nil }
                     let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey])
@@ -654,6 +774,82 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
                 publish(items)
             } catch {
                 publish([])
+            }
+        }
+    }
+
+    private func searchFilesByExtension(_ fileExtension: String, generation: Int) {
+        let directIndex = indexedFiles
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let directItems = directIndex.compactMap { file -> SearchItem? in
+                guard file.url.pathExtension.lowercased() == fileExtension else { return nil }
+                let values = try? file.url.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey])
+                guard values?.isDirectory != true else { return nil }
+                let modifiedAt = values?.contentModificationDate ?? .distantPast
+                return SearchItem(
+                    kind: .file,
+                    title: file.url.lastPathComponent,
+                    subtitle: datedPathSubtitle(url: file.url, modifiedAt: modifiedAt),
+                    url: file.url,
+                    score: 0,
+                    modifiedAt: modifiedAt
+                )
+            }
+
+            let process = Process()
+            let pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
+            process.arguments = [
+                "-onlyin", FileManager.default.homeDirectoryForCurrentUser.path,
+                "kMDItemFSName == '*.\(fileExtension)'cd"
+            ]
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            DispatchQueue.main.async { [weak self] in
+                guard let self, generation == self.searchGeneration else { return }
+                self.fileSearchProcess = process
+                self.updateResults()
+            }
+
+            do {
+                try process.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                let paths = String(data: data, encoding: .utf8)?.split(separator: "\n").map(String.init) ?? []
+                let metadataItems = paths.compactMap { path -> SearchItem? in
+                    guard !isSearchNoisePath(path) else { return nil }
+                    let url = URL(fileURLWithPath: path)
+                    guard url.pathExtension.lowercased() == fileExtension else { return nil }
+                    let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey])
+                    guard values?.isDirectory != true else { return nil }
+                    let modifiedAt = values?.contentModificationDate ?? .distantPast
+                    return SearchItem(
+                        kind: .file,
+                        title: url.lastPathComponent,
+                        subtitle: datedPathSubtitle(url: url, modifiedAt: modifiedAt),
+                        url: url,
+                        score: 0,
+                        modifiedAt: modifiedAt
+                    )
+                }
+
+                var seen = Set<String>()
+                let merged = (directItems + metadataItems)
+                    .filter { seen.insert($0.url.standardizedFileURL.path).inserted }
+                    .sorted { $0.modifiedAt > $1.modifiedAt }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, generation == self.searchGeneration else { return }
+                    self.fileSearchProcess = nil
+                    self.fileResults = merged
+                    self.updateResults()
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, generation == self.searchGeneration else { return }
+                    self.fileSearchProcess = nil
+                    self.fileResults = directItems.sorted { $0.modifiedAt > $1.modifiedAt }
+                    self.updateResults()
+                }
             }
         }
     }
@@ -794,7 +990,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showWindow()
+        if flag {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            showWindow()
+        }
         return true
     }
 }
@@ -803,6 +1004,10 @@ private func runSelfCheck() {
     precondition(normalized("Shadow Rocket") == "shadowrocket")
     precondition(fuzzyScore(query: "shadow", candidate: "Shadowrocket") == 10)
     precondition(fuzzyScore(query: "sr", candidate: "Shadowrocket") != nil)
+    precondition(fileExtensionQuery(".PDF") == "pdf")
+    precondition(fileExtensionQuery(".") == nil)
+    precondition(fileTypeSuggestions().first?.title == ".pdf")
+    precondition(NSURL(fileURLWithPath: "/tmp/example.pdf").writableTypes(for: NSPasteboard.general).contains(.fileURL))
     precondition(shouldSkipDirectory("node_modules"))
     precondition(defaultSearchRoots().contains(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")))
     let sample = IndexedFile(url: URL(fileURLWithPath: "/tmp/基础检索.txt"), name: "基础检索.txt", modifiedAt: .distantPast, isDirectory: false)
@@ -818,7 +1023,7 @@ private func runSelfCheck() {
     let shadowrocket = apps.first { $0.name == "Shadowrocket" && $0.url.path == "/Applications/Shadowrocket.app" }
     precondition(shadowrocket != nil)
     precondition(fuzzyScore(query: "小火箭", candidate: shadowrocket!.searchable) != nil)
-    print("PASS: recommendations, bookmarks, applications and local filenames")
+    print("PASS: recommendations, bookmarks, extension filters, applications and local filenames")
 }
 
 if CommandLine.arguments.contains("--self-check") {
