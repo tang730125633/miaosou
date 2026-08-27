@@ -28,6 +28,14 @@ private struct IndexedFile {
     let isDirectory: Bool
 }
 
+private struct HiddenConfigActivity {
+    let url: URL
+    let modifiedAt: Date
+    let recentChanges: Int
+    let isDirectory: Bool
+    let reachedLimit: Bool
+}
+
 private struct InstalledApplication {
     let url: URL
     let name: String
@@ -107,6 +115,95 @@ private func normalizedSearchInput(_ text: String) -> String {
     text.replacingOccurrences(of: "。", with: ".")
         .replacingOccurrences(of: "．", with: ".")
         .replacingOccurrences(of: "，", with: ",")
+        .replacingOccurrences(of: "＠", with: "@")
+}
+
+private func hiddenConfigQuery(_ query: String) -> String? {
+    let trimmed = normalizedSearchInput(query).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasPrefix("@") else { return nil }
+    return String(trimmed.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func hiddenConfigActivity(at url: URL, now: Date, scanLimit: Int = 5_000) -> HiddenConfigActivity {
+    let keys: Set<URLResourceKey> = [.contentModificationDateKey, .isDirectoryKey, .isSymbolicLinkKey]
+    let values = try? url.resourceValues(forKeys: keys)
+    let isDirectory = values?.isDirectory == true
+    var latest = values?.contentModificationDate ?? .distantPast
+    let cutoff = now.addingTimeInterval(-30 * 86_400)
+    var recentChanges = !isDirectory && latest >= cutoff ? 1 : 0
+    var checked = 0
+    var reachedLimit = false
+
+    if isDirectory, values?.isSymbolicLink != true,
+       let enumerator = FileManager.default.enumerator(
+        at: url,
+        includingPropertiesForKeys: Array(keys),
+        options: [.skipsPackageDescendants]
+       ) {
+        let ignoredDirectories = Set([".git", "node_modules", "Caches", "Cache", "cache", "tmp"])
+        while let child = enumerator.nextObject() as? URL {
+            checked += 1
+            if checked > scanLimit {
+                reachedLimit = true
+                break
+            }
+            let childValues = try? child.resourceValues(forKeys: keys)
+            if childValues?.isDirectory == true, ignoredDirectories.contains(child.lastPathComponent) {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard childValues?.isDirectory != true else { continue }
+            let modifiedAt = childValues?.contentModificationDate ?? .distantPast
+            latest = max(latest, modifiedAt)
+            if modifiedAt >= cutoff { recentChanges += 1 }
+        }
+    }
+
+    return HiddenConfigActivity(
+        url: url,
+        modifiedAt: latest,
+        recentChanges: recentChanges,
+        isDirectory: isDirectory,
+        reachedLimit: reachedLimit
+    )
+}
+
+private func hiddenConfigResults(query: String, home: URL = FileManager.default.homeDirectoryForCurrentUser, now: Date = Date()) -> [SearchItem] {
+    let keys: Set<URLResourceKey> = [.contentModificationDateKey, .isDirectoryKey, .isSymbolicLinkKey]
+    let ignored = Set([".DS_Store", ".Trash", ".cache", ".localized"])
+    let urls = (try? FileManager.default.contentsOfDirectory(
+        at: home,
+        includingPropertiesForKeys: Array(keys),
+        options: []
+    )) ?? []
+
+    return urls.compactMap { url -> SearchItem? in
+        let name = url.lastPathComponent
+        guard name.hasPrefix("."), name.count > 1, !ignored.contains(name) else { return nil }
+        let matchScore: Int
+        if query.isEmpty {
+            matchScore = 0
+        } else {
+            guard let score = fuzzyScore(query: query, candidate: name), score < 100 else { return nil }
+            matchScore = score
+        }
+        let activity = hiddenConfigActivity(at: url, now: now)
+        let count = "\(activity.recentChanges)\(activity.reachedLimit ? "+" : "")"
+        let date = activity.modifiedAt == .distantPast
+            ? "未知时间"
+            : DateFormatter.localizedString(from: activity.modifiedAt, dateStyle: .short, timeStyle: .short)
+        return SearchItem(
+            kind: activity.isDirectory ? .folder : .file,
+            title: name,
+            subtitle: "近 30 天改动 \(count) 项 · \(date) · \(url.path)",
+            url: url,
+            score: matchScore * 10_000 - min(activity.recentChanges, 9_999),
+            modifiedAt: activity.modifiedAt
+        )
+    }
+    .sorted { $0.score == $1.score ? $0.modifiedAt > $1.modifiedAt : $0.score < $1.score }
+    .prefix(40)
+    .map { $0 }
 }
 
 private func fileTypeSuggestions() -> [SearchItem] {
@@ -402,6 +499,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
     private var fileResults: [SearchItem] = []
     private var indexedFiles: [IndexedFile] = []
     private var isIndexingFiles = true
+    private var isSearchingHiddenConfigs = false
     private var excludedRecommendationBundleID: String?
     private var lastApplicationRefresh = Date()
     private var isRefreshingApplications = false
@@ -524,6 +622,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         searchField.stringValue = ""
         fileSearchWorkItem?.cancel()
         fileSearchProcess?.terminate()
+        isSearchingHiddenConfigs = false
         fileResults = []
         updateResults()
     }
@@ -600,8 +699,9 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         fileSearchWorkItem?.cancel()
         fileSearchProcess?.terminate()
         fileResults = []
-        updateResults()
         let query = searchField.stringValue
+        isSearchingHiddenConfigs = hiddenConfigQuery(query) != nil
+        updateResults()
         guard query != ".", !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let generation = searchGeneration
         let workItem = DispatchWorkItem { [weak self] in
@@ -708,6 +808,12 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
             statusLabel.stringValue = recommendations.isEmpty
                 ? "已找到 \(applications.count) 个应用 · \(fileStatus)"
                 : "推荐打开 · 最近和常用优先 · \(fileStatus)"
+        } else if hiddenConfigQuery(query) != nil {
+            websiteResults = []
+            appResults = []
+            statusLabel.stringValue = isSearchingHiddenConfigs
+                ? "正在统计隐藏配置活跃度…"
+                : (fileResults.isEmpty ? "没有找到匹配的隐藏配置" : "隐藏配置 · \(fileResults.count) 项 · 近 30 天改动优先")
         } else if query == "." {
             websiteResults = []
             appResults = []
@@ -737,7 +843,9 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
                 : (fileResults.isEmpty && isIndexingFiles ? "正在整理常用文件…" : "应用优先 · 文件和文件夹直接检索")
         }
 
-        if query == "." {
+        if hiddenConfigQuery(query) != nil {
+            results = fileResults
+        } else if query == "." {
             results = fileTypeSuggestions()
         } else if fileExtensionQuery(query) != nil {
             results = fileResults
@@ -753,6 +861,16 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
 
     private func searchFiles(query: String, generation: Int) {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let hiddenQuery = hiddenConfigQuery(term) {
+            let items = hiddenConfigResults(query: hiddenQuery)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, generation == self.searchGeneration else { return }
+                self.isSearchingHiddenConfigs = false
+                self.fileResults = items
+                self.updateResults()
+            }
+            return
+        }
         if let fileExtension = fileExtensionQuery(term) {
             searchFilesByExtension(fileExtension, generation: generation)
             return
@@ -1048,7 +1166,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
 }
 
 private func runSelfCheck() {
-    precondition(normalizedSearchInput("。pdf，md．docx") == ".pdf,md.docx")
+    precondition(normalizedSearchInput("。pdf，md．docx＠pi") == ".pdf,md.docx@pi")
+    precondition(hiddenConfigQuery("@") == "")
+    precondition(hiddenConfigQuery("＠codex") == "codex")
+    precondition(hiddenConfigQuery("codex") == nil)
     precondition(normalized("Shadow Rocket") == "shadowrocket")
     precondition(fuzzyScore(query: "shadow", candidate: "Shadowrocket") == 10)
     precondition(fuzzyScore(query: "sr", candidate: "Shadowrocket") != nil)
@@ -1068,6 +1189,19 @@ private func runSelfCheck() {
     let bookmarks = loadBookmarks()
     precondition(bookmarkResults(query: "X", bookmarks: bookmarks).first?.title == "X / Twitter")
     precondition(bookmarkResults(query: "黄雀", bookmarks: bookmarks).first?.title == "黄雀主站")
+    let hiddenFixture = FileManager.default.temporaryDirectory.appendingPathComponent("miaosou-hidden-\(UUID().uuidString)")
+    let recentHidden = hiddenFixture.appendingPathComponent(".recent")
+    let oldHidden = hiddenFixture.appendingPathComponent(".old")
+    try? FileManager.default.createDirectory(at: recentHidden, withIntermediateDirectories: true)
+    try? FileManager.default.createDirectory(at: oldHidden, withIntermediateDirectories: true)
+    try? Data("recent".utf8).write(to: recentHidden.appendingPathComponent("settings.json"))
+    let oldFile = oldHidden.appendingPathComponent("settings.json")
+    try? Data("old".utf8).write(to: oldFile)
+    try? FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-40 * 86_400)], ofItemAtPath: oldFile.path)
+    let hiddenResults = hiddenConfigResults(query: "", home: hiddenFixture, now: now)
+    precondition(hiddenResults.first?.title == ".recent")
+    precondition(hiddenConfigResults(query: "old", home: hiddenFixture, now: now).first?.title == ".old")
+    try? FileManager.default.removeItem(at: hiddenFixture)
     let apps = installedApplications()
     let shadowrocket = apps.first { $0.name == "Shadowrocket" && $0.url.path == "/Applications/Shadowrocket.app" }
     precondition(shadowrocket != nil)
