@@ -158,70 +158,94 @@ private func recommendationSubtitle(_ app: InstalledApplication, now: Date = Dat
 private func defaultSearchRoots() -> [URL] {
     let manager = FileManager.default
     let directories: [FileManager.SearchPathDirectory] = [
-        .desktopDirectory, .documentDirectory, .downloadsDirectory,
-        .moviesDirectory, .musicDirectory, .picturesDirectory
+        .desktopDirectory, .documentDirectory, .downloadsDirectory
     ]
-    var roots = directories.compactMap { manager.urls(for: $0, in: .userDomainMask).first }
-    let iCloud = manager.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs")
-    if manager.fileExists(atPath: iCloud.path) { roots.append(iCloud) }
+    let roots = directories.compactMap { manager.urls(for: $0, in: .userDomainMask).first }
     return Array(Dictionary(grouping: roots, by: \.standardizedFileURL.path).values.compactMap(\.first))
 }
 
+private let skippedDirectoryNames = [
+    ".git", "node_modules", ".venv", "venv", "site-packages", "deriveddata", "build", "dist"
+]
+
 private func shouldSkipDirectory(_ name: String) -> Bool {
-    [".git", "node_modules", ".venv", "venv", "site-packages", "deriveddata", "build", "dist"]
-        .contains(name.lowercased())
+    skippedDirectoryNames.contains(name.lowercased())
+}
+
+private func scanLocalRoot(_ root: URL) -> [IndexedFile] {
+    let manager = FileManager.default
+    guard manager.fileExists(atPath: root.path) else { return [] }
+
+    let maxDepth = 3
+    let perRootLimit = 50_000
+    let process = Process()
+    let pipe = Pipe()
+    let readerFinished = DispatchSemaphore(value: 0)
+    let outputLock = NSLock()
+    var output = Data()
+
+    var arguments = ["-x", root.path, "("]
+    let pruneNames = [".*"] + skippedDirectoryNames + ["*.app", "*.photoslibrary"]
+    for (index, name) in pruneNames.enumerated() {
+        if index > 0 { arguments.append("-o") }
+        arguments += ["-name", name]
+    }
+    arguments += [
+        "-o", "-path", root.path + String(repeating: "/*", count: maxDepth),
+        ")", "-prune", "-o", "-print0"
+    ]
+
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/find")
+    process.arguments = arguments
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+
+    do {
+        try process.run()
+        DispatchQueue(label: "com.tang.miaosou.find-reader").async {
+            while true {
+                let chunk = pipe.fileHandleForReading.availableData
+                if chunk.isEmpty { break }
+                outputLock.lock()
+                output.append(chunk)
+                outputLock.unlock()
+            }
+            readerFinished.signal()
+        }
+        process.waitUntilExit()
+    } catch {
+        return []
+    }
+
+    readerFinished.wait()
+
+    outputLock.lock()
+    let data = output
+    outputLock.unlock()
+    return data.split(separator: 0).prefix(perRootLimit).compactMap { bytes in
+        guard let path = String(data: Data(bytes), encoding: .utf8), path != root.path else { return nil }
+        let url = URL(fileURLWithPath: path)
+        return IndexedFile(url: url, name: url.lastPathComponent, modifiedAt: .distantPast, isDirectory: false)
+    }
 }
 
 private func buildLocalFileIndex() -> [IndexedFile] {
-    let manager = FileManager.default
-    var files: [IndexedFile] = []
-    // ponytail: bound each standard root and depth; add a persistent index only when custom roots arrive.
-    let perRootLimit = 50_000
-    let maxDepth = 6
-
-    for root in defaultSearchRoots() where manager.fileExists(atPath: root.path) {
-        let rootStartCount = files.count
-        let rootDepth = root.pathComponents.count
-        guard let enumerator = manager.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { continue }
-
-        for case let url as URL in enumerator {
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey])
-            let isDirectory = values?.isDirectory == true
-            if isDirectory && shouldSkipDirectory(url.lastPathComponent) {
-                enumerator.skipDescendants()
-                continue
-            }
-            guard url.pathExtension.lowercased() != "app" else { continue }
-            if isDirectory && url.pathComponents.count - rootDepth >= maxDepth {
-                enumerator.skipDescendants()
-            }
-            files.append(IndexedFile(
-                url: url,
-                name: url.lastPathComponent,
-                modifiedAt: values?.contentModificationDate ?? .distantPast,
-                isDirectory: isDirectory
-            ))
-            if files.count - rootStartCount == perRootLimit { break }
-        }
-    }
-    return files
+    defaultSearchRoots().flatMap(scanLocalRoot)
 }
 
 private func directFileMatches(query: String, files: [IndexedFile]) -> [SearchItem] {
     files.compactMap { file in
         guard let score = fuzzyScore(query: query, candidate: file.name), score < 100 else { return nil }
+        let values = try? file.url.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey])
+        let isDirectory = values?.isDirectory ?? file.isDirectory
+        let modifiedAt = values?.contentModificationDate ?? file.modifiedAt
         return SearchItem(
-            kind: file.isDirectory ? .folder : .file,
+            kind: isDirectory ? .folder : .file,
             title: file.name,
             subtitle: file.url.deletingLastPathComponent().path,
             url: file.url,
             score: score,
-            modifiedAt: file.modifiedAt
+            modifiedAt: modifiedAt
         )
     }
     .sorted { $0.score == $1.score ? $0.modifiedAt > $1.modifiedAt : $0.score < $1.score }
@@ -689,6 +713,13 @@ private func runSelfCheck() {
 
 if CommandLine.arguments.contains("--self-check") {
     runSelfCheck()
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--index-check") {
+    for root in defaultSearchRoots() {
+        print("\(scanLocalRoot(root).count)\t\(root.path)")
+    }
     exit(0)
 }
 
