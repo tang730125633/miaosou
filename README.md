@@ -86,7 +86,7 @@
 要求 Apple Command Line Tools。仓库不依赖第三方 Swift 包。
 
 ```bash
-git clone git@github.com:tang730125633/miaosou.git
+git clone https://github.com/tang730125633/miaosou.git
 cd miaosou
 ./build.command
 ```
@@ -123,3 +123,7 @@ miaosou/
 
 - 最新版本：[秒搜 v0.7.0](https://github.com/tang730125633/miaosou/releases/tag/v0.7.0)
 - 平台：macOS 13+ / Apple Silicon
+
+## 开源协议
+
+秒搜采用 [MIT License](./LICENSE) 开源，可自由使用、修改与分发，但需保留版权和许可声明。
