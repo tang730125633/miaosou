@@ -19,8 +19,8 @@
     <text x="0" y="249" fill="#6e6a61" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="21">应用、文件、网站与最近常用，一次键入即可抵达。</text>
     <line x1="0" y1="289" x2="585" y2="289" stroke="#171612" stroke-opacity="0.24"/>
     <text x="0" y="322" fill="#6e6a61" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">LOCAL FIRST</text>
-    <text x="160" y="322" fill="#6e6a61" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">PRIVATE</text>
-    <text x="278" y="322" fill="#6e6a61" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">NATIVE APPKIT</text>
+    <text x="160" y="322" fill="#6e6a61" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">OPEN SOURCE</text>
+    <text x="318" y="322" fill="#6e6a61" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17">NATIVE APPKIT</text>
   </g>
 
   <g transform="translate(698 42)">
