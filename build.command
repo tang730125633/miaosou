@@ -16,6 +16,10 @@ mkdir -p "$app_dir/Contents/Resources"
 /usr/bin/codesign --force --deep --sign - "$app_dir"
 "$app_dir/Contents/MacOS/秒搜" --self-check
 /usr/bin/pkill -x "秒搜" 2>/dev/null || true
+for _ in {1..30}; do
+  /usr/bin/pgrep -x "秒搜" >/dev/null || break
+  /bin/sleep 0.1
+done
 /usr/bin/ditto "$app_dir" "/Applications/秒搜.app"
 /usr/bin/osascript -e 'tell application "System Events" to if name of every login item does not contain "秒搜" then make login item at end with properties {name:"秒搜", path:"/Applications/秒搜.app", hidden:true}'
 /usr/bin/open -n "/Applications/秒搜.app"

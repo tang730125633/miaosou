@@ -133,20 +133,17 @@ private func installedApplications() -> [InstalledApplication] {
         for case let url as URL in enumerator where url.pathExtension.lowercased() == "app" {
             let path = url.standardizedFileURL.path
             guard seen.insert(path).inserted else { continue }
-            let bundle = Bundle(url: url)
-            let name = bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-                ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
-                ?? url.deletingPathExtension().lastPathComponent
-            let bundleID = bundle?.bundleIdentifier ?? ""
-            let executable = bundle?.object(forInfoDictionaryKey: "CFBundleExecutable") as? String ?? ""
-            let aliases = appAliases[bundleID, default: []].joined(separator: " ")
             let metadata = MDItemCreate(kCFAllocatorDefault, path as CFString)
+            let name = metadata.flatMap { MDItemCopyAttribute($0, "kMDItemDisplayName" as CFString) } as? String
+                ?? url.deletingPathExtension().lastPathComponent
+            let bundleID = metadata.flatMap { MDItemCopyAttribute($0, "kMDItemCFBundleIdentifier" as CFString) } as? String ?? ""
+            let aliases = appAliases[bundleID, default: []].joined(separator: " ")
             let useCount = (metadata.flatMap { MDItemCopyAttribute($0, "kMDItemUseCount" as CFString) } as? NSNumber)?.intValue ?? 0
             let lastUsedAt = metadata.flatMap { MDItemCopyAttribute($0, "kMDItemLastUsedDate" as CFString) } as? Date
             applications.append(InstalledApplication(
                 url: url,
                 name: name,
-                searchable: [name, bundleID, executable, aliases].joined(separator: " "),
+                searchable: [name, bundleID, aliases].joined(separator: " "),
                 bundleID: bundleID,
                 useCount: useCount,
                 lastUsedAt: lastUsedAt,
@@ -302,15 +299,18 @@ private final class ResultCell: NSTableCellView {
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.imageScaling = .scaleProportionallyUpOrDown
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         titleLabel.lineBreakMode = .byTruncatingTail
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        subtitleLabel.font = .systemFont(ofSize: 11)
+        subtitleLabel.font = .systemFont(ofSize: 11.5)
         subtitleLabel.textColor = .secondaryLabelColor
         subtitleLabel.lineBreakMode = .byTruncatingMiddle
         badgeLabel.translatesAutoresizingMaskIntoConstraints = false
         badgeLabel.font = .systemFont(ofSize: 10, weight: .medium)
-        badgeLabel.textColor = .tertiaryLabelColor
+        badgeLabel.alignment = .center
+        badgeLabel.drawsBackground = true
+        badgeLabel.wantsLayer = true
+        badgeLabel.layer?.cornerRadius = 7
 
         [iconView, titleLabel, subtitleLabel, badgeLabel].forEach(addSubview)
         NSLayoutConstraint.activate([
@@ -320,12 +320,14 @@ private final class ResultCell: NSTableCellView {
             iconView.heightAnchor.constraint(equalToConstant: 38),
             titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 12),
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: badgeLabel.leadingAnchor, constant: -10),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: badgeLabel.leadingAnchor, constant: -12),
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 3),
-            subtitleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            badgeLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            badgeLabel.firstBaselineAnchor.constraint(equalTo: titleLabel.firstBaselineAnchor)
+            subtitleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -28),
+            badgeLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -28),
+            badgeLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            badgeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 46),
+            badgeLabel.heightAnchor.constraint(equalToConstant: 20)
         ])
     }
 
@@ -352,19 +354,27 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
 
     override func loadView() {
         let effectView = NSVisualEffectView()
-        effectView.material = .underWindowBackground
-        effectView.blendingMode = .behindWindow
+        effectView.material = .popover
+        effectView.blendingMode = .withinWindow
         effectView.state = .active
         view = effectView
 
         searchField.translatesAutoresizingMaskIntoConstraints = false
-        searchField.placeholderString = "搜索应用和文件"
-        searchField.font = .systemFont(ofSize: 22)
-        searchField.focusRingType = .none
+        searchField.placeholderAttributedString = NSAttributedString(
+            string: "搜索应用、文件或网站",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 18, weight: .regular),
+                .foregroundColor: NSColor.secondaryLabelColor
+            ]
+        )
+        searchField.font = .systemFont(ofSize: 18, weight: .medium)
+        searchField.controlSize = .large
+        searchField.bezelStyle = .roundedBezel
+        searchField.focusRingType = .default
         searchField.delegate = self
 
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.font = .systemFont(ofSize: 12)
+        statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
         statusLabel.textColor = .secondaryLabelColor
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("result"))
@@ -374,7 +384,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         tableView.rowHeight = 58
         tableView.backgroundColor = .clear
         tableView.intercellSpacing = NSSize(width: 0, height: 2)
-        tableView.selectionHighlightStyle = .regular
+        tableView.style = .sourceList
         tableView.dataSource = self
         tableView.delegate = self
         tableView.doubleAction = #selector(openSelected)
@@ -387,17 +397,17 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         scrollView.borderType = .noBorder
 
         footerLabel.translatesAutoresizingMaskIntoConstraints = false
-        footerLabel.font = .systemFont(ofSize: 11)
-        footerLabel.textColor = .tertiaryLabelColor
+        footerLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        footerLabel.textColor = .secondaryLabelColor
         footerLabel.alignment = .center
 
         [searchField, statusLabel, scrollView, footerLabel].forEach(view.addSubview)
         NSLayoutConstraint.activate([
-            searchField.topAnchor.constraint(equalTo: view.topAnchor, constant: 24),
+            searchField.topAnchor.constraint(equalTo: view.topAnchor, constant: 22),
             searchField.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
             searchField.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
-            searchField.heightAnchor.constraint(equalToConstant: 42),
-            statusLabel.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
+            searchField.heightAnchor.constraint(equalToConstant: 48),
+            statusLabel.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 10),
             statusLabel.leadingAnchor.constraint(equalTo: searchField.leadingAnchor, constant: 2),
             scrollView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 8),
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
@@ -458,18 +468,28 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
                 .map { NSWorkspace.shared.icon(forFile: $0.path) }
                 ?? NSImage(systemSymbolName: "globe", accessibilityDescription: "网站")
             cell.badgeLabel.stringValue = "网站"
+            cell.badgeLabel.textColor = .systemBlue
+            cell.badgeLabel.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.10)
         case .recommendation:
             cell.iconView.image = NSWorkspace.shared.icon(forFile: item.url.path)
             cell.badgeLabel.stringValue = "推荐"
+            cell.badgeLabel.textColor = .systemIndigo
+            cell.badgeLabel.backgroundColor = NSColor.systemIndigo.withAlphaComponent(0.10)
         case .application:
             cell.iconView.image = NSWorkspace.shared.icon(forFile: item.url.path)
             cell.badgeLabel.stringValue = "应用"
+            cell.badgeLabel.textColor = .secondaryLabelColor
+            cell.badgeLabel.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.08)
         case .file:
             cell.iconView.image = NSWorkspace.shared.icon(forFile: item.url.path)
             cell.badgeLabel.stringValue = "文件"
+            cell.badgeLabel.textColor = .secondaryLabelColor
+            cell.badgeLabel.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.08)
         case .folder:
             cell.iconView.image = NSWorkspace.shared.icon(forFile: item.url.path)
             cell.badgeLabel.stringValue = "文件夹"
+            cell.badgeLabel.textColor = .secondaryLabelColor
+            cell.badgeLabel.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.08)
         }
         return cell
     }
@@ -681,6 +701,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         window.title = "秒搜"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
         window.isMovableByWindowBackground = true
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -688,7 +711,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         window.setContentSize(NSSize(width: 760, height: 520))
         window.minSize = NSSize(width: 620, height: 420)
         window.delegate = self
-        window.center()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "打开秒搜")
@@ -747,7 +769,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         controller.showRecommendations(excluding: previousBundleID)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        positionWindowOnActiveScreen()
         controller.focusSearch()
+    }
+
+    private func positionWindowOnActiveScreen() {
+        let screen = NSScreen.screens.first { $0.frame.origin == .zero } ?? NSScreen.main
+        guard let frame = screen?.visibleFrame else { return }
+        let origin = NSPoint(
+            x: frame.midX - window.frame.width / 2,
+            y: frame.midY - window.frame.height / 2 + frame.height * 0.08
+        )
+        window.setFrameOrigin(origin)
     }
 
     @objc private func refreshApplications() {
@@ -758,6 +791,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         sender.orderOut(nil)
         return false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showWindow()
+        return true
     }
 }
 
