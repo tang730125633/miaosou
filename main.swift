@@ -1,9 +1,11 @@
 import AppKit
 import Carbon.HIToolbox
+import CoreServices
 import Foundation
 
 private enum ItemKind {
     case application
+    case recommendation
     case file
     case folder
 }
@@ -22,6 +24,16 @@ private struct IndexedFile {
     let name: String
     let modifiedAt: Date
     let isDirectory: Bool
+}
+
+private struct InstalledApplication {
+    let url: URL
+    let name: String
+    let searchable: String
+    let bundleID: String
+    let useCount: Int
+    let lastUsedAt: Date?
+    let isRunning: Bool
 }
 
 private let appAliases: [String: [String]] = [
@@ -61,14 +73,17 @@ private func fuzzyScore(query: String, candidate: String) -> Int? {
     return 100 + firstMatch + (lastMatch - firstMatch - needle.count)
 }
 
-private func installedApplications() -> [(url: URL, name: String, searchable: String)] {
+private func installedApplications() -> [InstalledApplication] {
     let roots = [
         URL(fileURLWithPath: "/Applications"),
         URL(fileURLWithPath: "/System/Applications"),
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")
     ]
     var seen = Set<String>()
-    var applications: [(URL, String, String)] = []
+    var applications: [InstalledApplication] = []
+    let runningPaths = Set(NSWorkspace.shared.runningApplications.compactMap {
+        $0.bundleURL?.standardizedFileURL.path
+    })
 
     for root in roots where FileManager.default.fileExists(atPath: root.path) {
         guard let enumerator = FileManager.default.enumerator(
@@ -87,10 +102,57 @@ private func installedApplications() -> [(url: URL, name: String, searchable: St
             let bundleID = bundle?.bundleIdentifier ?? ""
             let executable = bundle?.object(forInfoDictionaryKey: "CFBundleExecutable") as? String ?? ""
             let aliases = appAliases[bundleID, default: []].joined(separator: " ")
-            applications.append((url, name, [name, bundleID, executable, aliases].joined(separator: " ")))
+            let metadata = MDItemCreate(kCFAllocatorDefault, path as CFString)
+            let useCount = (metadata.flatMap { MDItemCopyAttribute($0, "kMDItemUseCount" as CFString) } as? NSNumber)?.intValue ?? 0
+            let lastUsedAt = metadata.flatMap { MDItemCopyAttribute($0, "kMDItemLastUsedDate" as CFString) } as? Date
+            applications.append(InstalledApplication(
+                url: url,
+                name: name,
+                searchable: [name, bundleID, executable, aliases].joined(separator: " "),
+                bundleID: bundleID,
+                useCount: useCount,
+                lastUsedAt: lastUsedAt,
+                isRunning: runningPaths.contains(path)
+            ))
         }
     }
-    return applications.sorted { $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending }
+    return applications.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+}
+
+private func recommendationScore(_ app: InstalledApplication, now: Date = Date()) -> Double {
+    let ageDays = app.lastUsedAt.map { max(0, now.timeIntervalSince($0) / 86_400) } ?? 60
+    let frequency = log2(Double(max(0, app.useCount)) + 1) * 15
+    let recency = max(0, 30 - ageDays) * 4
+    return frequency + recency - min(ageDays, 180) + (app.isRunning ? 10 : 0)
+}
+
+private func recommendedApplications(
+    _ applications: [InstalledApplication],
+    excluding bundleID: String?,
+    now: Date = Date()
+) -> [InstalledApplication] {
+    applications
+        .filter { app in
+            app.bundleID != "com.tang.miaosou"
+                && app.bundleID != bundleID
+                && (app.useCount > 0 || app.lastUsedAt != nil || app.isRunning)
+        }
+        .sorted {
+            let left = recommendationScore($0, now: now)
+            let right = recommendationScore($1, now: now)
+            return left == right ? $0.name < $1.name : left > right
+        }
+}
+
+private func recommendationSubtitle(_ app: InstalledApplication, now: Date = Date()) -> String {
+    var details: [String] = []
+    if app.isRunning { details.append("正在运行") }
+    if app.useCount > 0 { details.append("使用 \(app.useCount) 次") }
+    if let lastUsedAt = app.lastUsedAt {
+        let days = max(0, Int(now.timeIntervalSince(lastUsedAt) / 86_400))
+        details.append(days == 0 ? "今天使用" : "\(days) 天前")
+    }
+    return details.isEmpty ? app.url.path : details.joined(separator: " · ")
 }
 
 private func defaultSearchRoots() -> [URL] {
@@ -219,6 +281,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
     private var fileResults: [SearchItem] = []
     private var indexedFiles: [IndexedFile] = []
     private var isIndexingFiles = true
+    private var excludedRecommendationBundleID: String?
     private var fileSearchProcess: Process?
     private var searchGeneration = 0
     private(set) var results: [SearchItem] = []
@@ -297,6 +360,12 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         searchField.selectText(nil)
     }
 
+    func showRecommendations(excluding bundleID: String?) {
+        excludedRecommendationBundleID = bundleID
+        applications = installedApplications()
+        clearSearch()
+    }
+
     func refreshApplications() {
         applications = installedApplications()
         refreshFileIndex()
@@ -322,6 +391,7 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
         cell.subtitleLabel.stringValue = item.subtitle
         switch item.kind {
         case .application: cell.badgeLabel.stringValue = "应用"
+        case .recommendation: cell.badgeLabel.stringValue = "推荐"
         case .file: cell.badgeLabel.stringValue = "文件"
         case .folder: cell.badgeLabel.stringValue = "文件夹"
         }
@@ -378,11 +448,22 @@ private final class SearchViewController: NSViewController, NSSearchFieldDelegat
     private func updateResults() {
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty {
-            appResults = applications.prefix(12).enumerated().map { index, app in
-                SearchItem(kind: .application, title: app.name, subtitle: app.url.path, url: app.url, score: index, modifiedAt: .distantPast)
+            let recommendations = recommendedApplications(applications, excluding: excludedRecommendationBundleID)
+            let visibleApps = recommendations.isEmpty ? Array(applications.prefix(10)) : Array(recommendations.prefix(10))
+            appResults = visibleApps.enumerated().map { index, app in
+                SearchItem(
+                    kind: recommendations.isEmpty ? .application : .recommendation,
+                    title: app.name,
+                    subtitle: recommendations.isEmpty ? app.url.path : recommendationSubtitle(app),
+                    url: app.url,
+                    score: index,
+                    modifiedAt: app.lastUsedAt ?? .distantPast
+                )
             }
             let fileStatus = isIndexingFiles ? "正在整理常用文件…" : "直接索引 \(indexedFiles.count) 项"
-            statusLabel.stringValue = "已找到 \(applications.count) 个应用 · \(fileStatus)"
+            statusLabel.stringValue = recommendations.isEmpty
+                ? "已找到 \(applications.count) 个应用 · \(fileStatus)"
+                : "推荐打开 · 最近和常用优先 · \(fileStatus)"
         } else {
             appResults = applications.compactMap { app in
                 guard let score = fuzzyScore(query: query, candidate: app.searchable) else { return nil }
@@ -569,6 +650,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     }
 
     @objc private func showWindow() {
+        let previousBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        controller.showRecommendations(excluding: previousBundleID)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         controller.focusSearch()
@@ -593,6 +676,10 @@ private func runSelfCheck() {
     precondition(defaultSearchRoots().contains(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")))
     let sample = IndexedFile(url: URL(fileURLWithPath: "/tmp/基础检索.txt"), name: "基础检索.txt", modifiedAt: .distantPast, isDirectory: false)
     precondition(directFileMatches(query: "基础", files: [sample]).first?.title == "基础检索.txt")
+    let now = Date()
+    let recent = InstalledApplication(url: URL(fileURLWithPath: "/Recent.app"), name: "Recent", searchable: "Recent", bundleID: "test.recent", useCount: 5, lastUsedAt: now.addingTimeInterval(-3_600), isRunning: false)
+    let stale = InstalledApplication(url: URL(fileURLWithPath: "/Stale.app"), name: "Stale", searchable: "Stale", bundleID: "test.stale", useCount: 50, lastUsedAt: now.addingTimeInterval(-120 * 86_400), isRunning: false)
+    precondition(recommendedApplications([stale, recent], excluding: nil, now: now).first?.bundleID == "test.recent")
     let apps = installedApplications()
     let shadowrocket = apps.first { $0.name == "Shadowrocket" && $0.url.path == "/Applications/Shadowrocket.app" }
     precondition(shadowrocket != nil)
