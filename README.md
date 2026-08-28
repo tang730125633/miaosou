@@ -23,7 +23,7 @@
 
 ## 它能做什么
 
-- **替代 Spotlight 入口**：用 `⌘ Space` 显示或隐藏搜索窗口。
+- **替代 Spotlight 入口**：用 `⌘ Space` 显示或隐藏搜索窗口；秒搜在底层拦截 `⌘ Space`，系统 Spotlight 不会再弹出。
 - **直接找到 App**：扫描系统与用户应用目录，不依赖 Spotlight 查找应用。
 - **推荐常用应用**：读取本机使用次数、最近时间与运行状态，并排除当前应用。
 - **关键词直达网站**：例如输入 `X`，回车后固定用 Chrome 打开 Twitter。
@@ -58,7 +58,7 @@
 
 1. 从 [Releases](https://github.com/tang730125633/miaosou/releases/latest) 下载 `miaosou-v0.7.0-macos-arm64.zip`。
 2. 解压后把 `秒搜.app` 放入 `Applications`。
-3. 打开「系统设置 → 键盘 → 键盘快捷键 → Spotlight」，关闭“显示 Spotlight 搜索”。
+3. 打开秒搜；首次启动会请求「辅助功能」权限——点允许，秒搜用它拦截 `⌘ Space`、直接代替 Spotlight（系统 Spotlight 不会再弹出）。
 4. 打开秒搜；首次搜索桌面、文稿或下载时，按需允许对应文件夹权限。
 
 > 当前安装包使用本地临时签名，尚未使用 Apple Developer ID 公证。其他 Mac 首次运行时可能需要右键点击 App，选择“打开”。SHA-256 校验文件随 Release 一起提供。
@@ -112,6 +112,7 @@ codesign --verify --deep --strict /Applications/秒搜.app
 ## 隐私与当前边界
 
 - 使用统计、文件名与路径只在本机读取；秒搜不上传搜索词或个人画像。
+- 秒搜需要「辅助功能」权限来拦截 `⌘ Space` 并代替 Spotlight；该权限仅用于本机按键拦截，不涉及联网上传。
 - 打开网站书签时才会启动 Chrome 并访问对应公开 URL。
 - 深层文件结果依赖 macOS 元数据索引；尚未建立持久数据库或文件正文索引。
 - 超大后缀首次全量查询需要时间，例如数万条 Markdown 文件会在后台排序。
