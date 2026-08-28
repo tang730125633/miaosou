@@ -30,7 +30,8 @@ render_icon icon_512x512@2x.png 1024
 /usr/bin/plutil -lint "$project_dir/Info.plist"
 /usr/bin/ditto "$project_dir/Info.plist" "$app_dir/Contents/Info.plist"
 /usr/bin/ditto "$project_dir/bookmarks.json" "$app_dir/Contents/Resources/bookmarks.json"
-/usr/bin/codesign --force --deep --sign - "$app_dir"
+# 固定签名身份：优先用 Apple Development 证书（权限不随重编译失效），没有则回退临时签名
+/usr/bin/codesign --force --deep --sign "Apple Development" "$app_dir" 2>/dev/null || /usr/bin/codesign --force --deep --sign - "$app_dir"
 "$app_dir/Contents/MacOS/秒搜" --self-check
 /usr/bin/pkill -x "秒搜" 2>/dev/null || true
 for _ in {1..30}; do

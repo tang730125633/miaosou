@@ -1,5 +1,7 @@
 import AppKit
+import ApplicationServices
 import Carbon.HIToolbox
+import CoreGraphics
 import CoreServices
 import Foundation
 import QuickLookUI
@@ -327,7 +329,9 @@ private func installedApplications() -> [InstalledApplication] {
             let metadata = MDItemCreate(kCFAllocatorDefault, path as CFString)
             let name = metadata.flatMap { MDItemCopyAttribute($0, "kMDItemDisplayName" as CFString) } as? String
                 ?? url.deletingPathExtension().lastPathComponent
-            let bundleID = metadata.flatMap { MDItemCopyAttribute($0, "kMDItemCFBundleIdentifier" as CFString) } as? String ?? ""
+            let bundleID = (metadata.flatMap { MDItemCopyAttribute($0, "kMDItemCFBundleIdentifier" as CFString) } as? String)
+                ?? Bundle(url: url)?.object(forInfoDictionaryKey: "CFBundleIdentifier") as? String
+                ?? ""
             let aliases = appAliases[bundleID, default: []].joined(separator: " ")
             let useCount = (metadata.flatMap { MDItemCopyAttribute($0, "kMDItemUseCount" as CFString) } as? NSNumber)?.intValue ?? 0
             let lastUsedAt = metadata.flatMap { MDItemCopyAttribute($0, "kMDItemLastUsedDate" as CFString) } as? Date
@@ -1175,6 +1179,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     private var statusItem: NSStatusItem!
     private var hotKey: EventHotKeyRef?
     private var hotKeyHandler: EventHandlerRef?
+    private var eventTap: CFMachPort?
+    private var eventTapSource: CFRunLoopSource?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -1208,6 +1214,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
         registerHotKey()
+        installEventTap()
         showWindow()
     }
 
@@ -1247,6 +1254,41 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         )
         let identifier = EventHotKeyID(signature: 0x4D534F55, id: 1)
         RegisterEventHotKey(UInt32(kVK_Space), UInt32(cmdKey), identifier, GetApplicationEventTarget(), 0, &hotKey)
+    }
+
+    private func installEventTap() {
+        let mask = CGEventMask((1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue))
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo -> Unmanaged<CGEvent>? in
+                guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+                let flags = event.flags
+                let isSpace = event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Space)
+                let hasCommand = flags.contains(.maskCommand)
+                let hasOther = flags.contains(.maskAlternate) || flags.contains(.maskShift) || flags.contains(.maskControl)
+                let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+                if isSpace && hasCommand && !hasOther && !isRepeat {
+                    if let userInfo = userInfo {
+                        Unmanaged<AppDelegate>.fromOpaque(userInfo).takeUnretainedValue().toggleWindow()
+                    }
+                    return nil
+                }
+                return Unmanaged.passUnretained(event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            let prompt = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(prompt)
+            return
+        }
+        eventTap = tap
+        if let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) {
+            eventTapSource = source
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        }
     }
 
     @objc private func toggleWindow() {
