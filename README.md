@@ -1,6 +1,8 @@
 <p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="秒搜：把 Command Space 变成个人应用、文件与网站入口">
+  <img src="./assets/readme/hero-zel-v1.webp" width="100%" alt="Zel and the orange cat sending one search beam toward applications, files, and websites">
 </p>
+
+# 秒搜 Miaosou
 
 <p align="center">
   <strong>比 Spotlight 更可控的个人 macOS 启动器。</strong><br>
